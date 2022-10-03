@@ -40,7 +40,6 @@ pub mod stake {
 impl Pool {
     pub const ONE_DAY_IN_SECOND: u128 = 86400;
     pub fn StakeToken(&mut self, amount: u128, stakeData: &mut StakingData) -> Result<()> {
-        self.staked_balance += amount;
         let time_now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -55,10 +54,6 @@ impl Pool {
         stakeData.reward = self.earned(stakeData).unwrap();
         stakeData.reward_per_token_paid = self.reward_per_token_store;
 
-        if stakeData.balance == 0 {
-            self.total_user_stake += 1;
-        }
-
         // Update staked balance
         stakeData.balance += amount;
 
@@ -67,6 +62,60 @@ impl Pool {
 
         self.staked_balance += amount;
 
+        // TODO: transfer token
+
+        Ok(())
+    }
+
+    pub fn unstake(&mut self, amount: u128, stakeData: &mut StakingData) -> Result<()> {
+        let time_now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        require_gte!(time_now, self.configs[0], StakeError::TimeInvalid);
+        require!(amount == stakeData.balance,StakeError::AmountInvalid);
+        // update reward
+        self.reward_per_token_store = self.rewardPerToken().unwrap();
+        self.last_update_time = time_now;
+        stakeData.reward = self.earned(stakeData).unwrap();
+        stakeData.reward_per_token_paid = self.reward_per_token_store;
+
+        stakeData.balance -= amount;
+
+         // Update staking time
+         stakeData.staked_time = time_now;
+
+         self.staked_balance -= amount;
+
+         // TODO: transfer token
+ 
+         Ok(())
+    }
+
+    pub fn claim(&mut self, stakeData: &mut StakingData) ->Result<()>{
+        let time_now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        
+        // update reward
+        self.reward_per_token_store = self.rewardPerToken().unwrap();
+        self.last_update_time = time_now;
+        stakeData.reward = self.earned(stakeData).unwrap();
+        stakeData.reward_per_token_paid = self.reward_per_token_store;
+
+        let reward = self.earned(stakeData).unwrap();
+        require!(reward>0,StakeError::RewardIs0);
+        require!(self.canGetReward(stakeData).unwrap(), StakeError::NotEnounghTime);
+        // TODO: check balance contract
+
+        // Reset Reward
+        stakeData.reward = 0;
+
+        self.reward_fund -= reward;
+
+
+        // TODO: transfer token reward
         Ok(())
     }
 
