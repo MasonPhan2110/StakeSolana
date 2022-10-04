@@ -7,11 +7,62 @@ declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
 
 #[program]
 pub mod stake {
+    use std::str::FromStr;
+
     use super::*;
-    pub fn stake(ctx: Context<Stake>, amount: u128) -> Result<()> {
+    const CONTROLLER:&str = "6JPfrJCb9jW2zatfm7NuehMWG9oGvEfg4NvHshGsB7Bn";
+    pub fn createUserData(ctx: Context<CreateUserData>, user_key: Pubkey) -> Result<()> {
+        ctx.accounts.user_data.is_admin = false;
+        ctx.accounts.user_data.stake_balance = 0;
+        ctx.accounts.user_data.is_blacklist = false;
+        ctx.accounts.user_data.user_key = user_key;
+        ctx.accounts.user_data.bump = *ctx.bumps.get("user").unwrap();
+        Ok(())
+    }
+    pub fn createAdminAccount(ctx:Context<CreateUserData>, user_key: Pubkey) -> Result<()> {
+        let _controller = Pubkey::from_str(self::CONTROLLER).unwrap();
+        require!(ctx.accounts.user.key() == _controller,StakeError::OnlyController);
+        ctx.accounts.user_data.is_admin = true;
+        ctx.accounts.user_data.stake_balance = 0;
+        ctx.accounts.user_data.is_blacklist = false;
+        ctx.accounts.user_data.user_key = user_key;
+        ctx.accounts.user_data.bump = *ctx.bumps.get("user").unwrap();
+        Ok(())
+    }
+    pub fn setAdmin(ctx: Context<GetUserData>, isAdmin:bool) ->Result<()> {
+        let _controller = Pubkey::from_str(self::CONTROLLER).unwrap();
+        require!(ctx.accounts.user.key() == _controller,StakeError::OnlyController);
+        ctx.accounts.user_data.is_admin = isAdmin;
+        Ok(())
+    }
+    pub fn setBlackList(ctx: Context<GetUserData>, isBlackList:bool) ->Result<()> {
+        let _controller = Pubkey::from_str(self::CONTROLLER).unwrap();
+        require!(ctx.accounts.user.key() == _controller,StakeError::OnlyController);
+        ctx.accounts.user_data.is_blacklist = isBlackList;
+        Ok(())
+    }
+    pub fn stake(ctx: Context<Stake>, amount: u128, pool_id: String, internal_id: String) -> Result<()> {
         let pool = &mut ctx.accounts.pool;
+        ctx.accounts.stakedata.balance= 0;
+        ctx.accounts.stakedata.staked_time= 0;
+        ctx.accounts.stakedata.unstaked_time= 0;
+        ctx.accounts.stakedata.reward= 0;
+        ctx.accounts.stakedata.reward_per_token_paid= 0;
+        ctx.accounts.stakedata.account= ctx.accounts.user.key();
+        ctx.accounts.stakedata.internal_id= internal_id;
+        ctx.accounts.stakedata.pool_id= pool_id;
         ctx.accounts.stakedata.bump = *ctx.bumps.get("stakedata").unwrap();
         pool.StakeToken(amount, &mut ctx.accounts.stakedata)
+    }
+
+    pub fn unstatke(ctx: Context<GetStakeData>, amount: u128) -> Result<()> {
+        let pool = &mut ctx.accounts.pool;
+        pool.unstake(amount,&mut ctx.accounts.stakedata)
+    }
+
+    pub fn claimreward(ctx: Context<GetStakeData>) -> Result<()> {
+        let pool = &mut ctx.accounts.pool;
+        pool.claim(&mut ctx.accounts.stakedata)
     }
     pub fn createPool(
         ctx: Context<CreatePool>,
@@ -188,32 +239,44 @@ pub struct StakingData {
     reward: u128,
     reward_per_token_paid: u128,
     account: Pubkey,
+    internal_id: String,
+    pool_id: String,
+    bump: u8,
+}
+
+#[account]
+pub struct User {
+    user_key: Pubkey,
+    is_admin: bool,
+    is_controller: bool,
+    stake_balance: u128,
+    is_blacklist: bool,
     bump: u8,
 }
 
 #[derive(Accounts)]
-#[instruction(pool_id: String, internalId: String)]
+#[instruction(pool_id: String)]
 pub struct CreatePool<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
     #[account(
         init,
         payer = user,
-        space = 8+32*2+12*16+1+1+4+200, seeds = [b"pool",system_program.key().as_ref() ,pool_id.as_ref(), internalId.as_ref()], bump
+        space = 8+32*2+12*16+1+1+4+200, seeds = [b"pool",system_program.key().as_ref() ,pool_id.as_ref()], bump
     )]
     pub pool: Account<'info, Pool>,
     pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
-#[instruction(pool_id: String)]
+#[instruction(pool_id: String, internal_id: String)]
 pub struct Stake<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
     #[account(
         init,
         payer = user, 
-        space = 8 + 16*5 + 32 + 1, seeds= [b"stakedata", user.key().as_ref(),pool_id.as_ref()], bump
+        space = 8 + 16*5 + 32 + 1 + 4+200, seeds= [b"stakedata", user.key().as_ref(),pool_id.as_ref(), internal_id.as_ref()], bump
     )]
     pub stakedata : Account<'info, StakingData>,
 
@@ -222,10 +285,47 @@ pub struct Stake<'info> {
 
     pub system_program: Program<'info, System>,
 }
+
+#[derive(Accounts)]
+pub struct GetStakeData<'info> {
+    pub user: Signer<'info>,
+    #[account(mut, seeds = [b"stakedata", user.key().as_ref(),stakedata.pool_id.as_ref(), stakedata.internal_id.as_ref()], bump = stakedata.bump)]
+    pub stakedata : Account<'info, StakingData>,
+
+    #[account(mut, seeds = [b"pool", system_program.key().as_ref() ,pool.pool_id.as_ref()], bump = pool.bump)]
+    pub pool: Account<'info, Pool>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct Initialize{}
+
+#[derive(Accounts)]
+pub struct GetUserData<'info> {
+    pub user: Signer<'info>,
+    #[account(mut, seeds = [b"user",  user_data.user_key.as_ref()], bump = user_data.bump)]
+    pub user_data : Account<'info, User>,
+}
+
+#[derive(Accounts)]
+#[instruction(user_key: Pubkey)]
+pub struct CreateUserData<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+    #[account(
+        init,
+        payer = user, 
+        space = 8 + 32 + 4+16, seeds= [b"user", user_key.as_ref()], bump
+    )]
+    pub user_data :  Account<'info, User>,
+    pub system_program: Program<'info, System>,
+}
 #[error_code]
 pub enum StakeError {
     TimeInvalid,
     AmountInvalid,
     RewardIs0,
     NotEnounghTime,
+    OnlyController
 }
